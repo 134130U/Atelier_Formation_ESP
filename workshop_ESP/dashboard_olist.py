@@ -15,6 +15,7 @@ import pandas as pd
 import os
 import numpy as np
 from datetime import datetime, timedelta
+from config import DB_PATH, requet_PATH, DATA_DIR,datetime_col
 
 # Configuration de l'app
 
@@ -26,22 +27,24 @@ server = app.server
 
 
 # Chargement des données
-def load_data():
+def data_validation():
     """Charge toutes les données nécessaires"""
     try:
         # Données principales
-        df = pd.read_csv('output/prepared/olist_prepared_data.csv')
-        df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'])
-        df['order_delivered_customer_date'] = pd.to_datetime(df['order_delivered_customer_date'])
+        df = pd.read_csv(os.path.join(DATA_DIR, "olist_prepared_data.csv"))
+        datetime_columns = df.select_dtypes(include=[np.datetime64]).columns.tolist()
+        for col in datetime_col:
+            if col not in datetime_columns:
+                df[col] = pd.to_datetime(df[col])
         return df
+
     except Exception as e:
         print(f"Erreur lors du chargement : {e}")
         return None
 
 
-# Chargement des données
-df = load_data()
-
+# Chargement des données après validation
+df = data_validation()
 # Couleurs du thème
 colors = {
     'primary': '#3498db',
@@ -120,12 +123,6 @@ app.layout = html.Div([
      Input('status-filter', 'value')]
 )
 def display_page(tab, start_date, end_date, status_filter):
-    if df is None:
-        return html.Div([
-            html.H3("⚠️ Erreur de chargement des données"),
-            html.P("Vérifiez que le fichier '../output/prepared/olist_prepared_data.csv' existe")
-        ])
-
     # Filtrage des données
     filtered_df = df.copy()
 
@@ -161,8 +158,8 @@ def create_overview_page(filtered_df):
     # Calcul des métriques
     total_orders = filtered_df['order_id'].nunique()
     total_customers = filtered_df['customer_unique_id'].nunique()
-    total_revenue = filtered_df['total_amount_fcfa'].sum()
-    avg_basket = filtered_df.groupby('order_id')['total_amount_fcfa'].sum().mean() if total_orders > 0 else 0
+    total_revenue = filtered_df['total_price'].sum()
+    avg_basket = filtered_df.groupby('order_id')['total_price'].sum().mean() if total_orders > 0 else 0
     avg_review = filtered_df['review_score'].mean() if 'review_score' in filtered_df.columns and not filtered_df[
         'review_score'].isna().all() else 0
     conversion_rate = (filtered_df[filtered_df['order_status'] == 'delivered'][
@@ -173,8 +170,8 @@ def create_overview_page(filtered_df):
         html.Div([
             create_kpi_card("Commandes", f"{total_orders:,}", colors['primary'], "📦"),
             create_kpi_card("Clients", f"{total_customers:,}", colors['success'], "👥"),
-            create_kpi_card("CA Total", f"{total_revenue / 1e6:.1f}M FCFA", colors['danger'], "💰"),
-            create_kpi_card("Panier Moyen", f"{avg_basket:,.0f} FCFA", colors['warning'], "🛒"),
+            create_kpi_card("CA Total", f"{total_revenue / 1e6:.1f}M BRL", colors['danger'], "💰"),
+            create_kpi_card("Panier Moyen", f"{avg_basket:,.0f} BRL", colors['warning'], "🛒"),
             create_kpi_card("Note Moyenne", f"{avg_review:.2f}/5", colors['info'], "⭐"),
             create_kpi_card("Taux Livraison", f"{conversion_rate:.1f}%", colors['success'], "✅"),
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'between', 'marginBottom': '30px'}),
@@ -288,6 +285,7 @@ def create_satisfaction_page(filtered_df):
 def create_logistics_page(filtered_df):
     """Crée la page d'analyse logistique"""
 
+    print(filtered_df.columns)
     avg_delivery = filtered_df['delivery_days'].mean() if 'delivery_days' in filtered_df.columns and not filtered_df[
         'delivery_days'].isna().all() else 0
     late_deliveries = (
@@ -351,13 +349,13 @@ def create_kpi_card(title, value, color, icon):
 def create_revenue_evolution(filtered_df):
     """Graphique évolution du CA"""
     monthly_revenue = filtered_df.groupby(filtered_df['order_purchase_timestamp'].dt.to_period('M'))[
-        'total_amount_fcfa'].sum()
+        'total_price'].sum()
 
     fig = px.line(
         x=monthly_revenue.index.astype(str),
         y=monthly_revenue.values / 1e6,
         title="Évolution du Chiffre d'Affaires",
-        labels={'x': 'Mois', 'y': 'CA (Millions FCFA)'}
+        labels={'x': 'Mois', 'y': 'BRL (Millions FCFA)'}
     )
     fig.update_traces(mode='lines+markers')
     return fig
@@ -378,27 +376,27 @@ def create_orders_by_status(filtered_df):
 
 def create_top_categories(filtered_df):
     """Graphique top catégories"""
-    top_categories = filtered_df.groupby('product_category_name_english')['total_amount_fcfa'].sum().nlargest(10)
+    top_categories = filtered_df.groupby('product_category_name')['total_price'].sum().nlargest(10)
 
     fig = px.bar(
         x=top_categories.values / 1e6,
         y=top_categories.index,
         orientation='h',
         title="Top 10 Catégories par CA",
-        labels={'x': 'CA (Millions FCFA)', 'y': 'Catégorie'}
+        labels={'x': 'CA (Millions BRL)', 'y': 'Catégorie'}
     )
     return fig
 
 
 def create_geographic_distribution(filtered_df):
     """Graphique distribution géographique"""
-    state_revenue = filtered_df.groupby('customer_state')['total_amount_fcfa'].sum().nlargest(10)
+    state_revenue = filtered_df.groupby('customer_state')['total_price'].sum().nlargest(10)
 
     fig = px.bar(
         x=state_revenue.index,
         y=state_revenue.values / 1e6,
         title="Top 10 États par CA",
-        labels={'x': 'État', 'y': 'CA (Millions FCFA)'},
+        labels={'x': 'État', 'y': 'CA (Millions BRL)'},
         color=state_revenue.values,
         color_continuous_scale='Viridis'
     )
@@ -409,7 +407,7 @@ def create_monthly_evolution(filtered_df):
     """Évolution mensuelle détaillée"""
     monthly_stats = filtered_df.groupby(filtered_df['order_purchase_timestamp'].dt.to_period('M')).agg({
         'order_id': 'nunique',
-        'total_amount_fcfa': 'sum',
+        'total_price': 'sum',
         'customer_unique_id': 'nunique'
     })
     monthly_stats.index = monthly_stats.index.astype(str)
@@ -426,7 +424,7 @@ def create_monthly_evolution(filtered_df):
     )
 
     fig.add_trace(
-        go.Scatter(x=monthly_stats.index, y=monthly_stats['total_amount_fcfa'] / 1e6, mode='lines+markers', name='CA'),
+        go.Scatter(x=monthly_stats.index, y=monthly_stats['total_price'] / 1e6, mode='lines+markers', name='CA'),
         row=2, col=1
     )
 
@@ -444,14 +442,14 @@ def create_weekly_pattern(filtered_df):
     """Pattern hebdomadaire"""
     days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     weekly_revenue = filtered_df.groupby(filtered_df['order_purchase_timestamp'].dt.day_name())[
-        'total_amount_fcfa'].sum()
+        'total_price'].sum()
     weekly_revenue = weekly_revenue.reindex(days_order)
 
     fig = px.bar(
         x=days_order,
         y=weekly_revenue.values / 1e6,
         title="Pattern Hebdomadaire du CA",
-        labels={'x': 'Jour', 'y': 'CA (Millions FCFA)'},
+        labels={'x': 'Jour', 'y': 'CA (Millions BRL)'},
         color=weekly_revenue.values,
         color_continuous_scale='Blues'
     )
@@ -488,7 +486,7 @@ def create_activity_heatmap(filtered_df):
     days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
     heatmap_data = filtered_df.pivot_table(
-        values='total_amount_fcfa',
+        values='total_price',
         index=filtered_df['order_purchase_timestamp'].dt.hour,
         columns=filtered_df['order_purchase_timestamp'].dt.day_name(),
         aggfunc='sum'
@@ -500,7 +498,7 @@ def create_activity_heatmap(filtered_df):
         x=days_order,
         y=list(range(24)),
         title="Heatmap CA par Jour et Heure",
-        labels={'x': 'Jour', 'y': 'Heure', 'color': 'CA (M FCFA)'},
+        labels={'x': 'Jour', 'y': 'Heure', 'color': 'CA (M BRL)'},
         color_continuous_scale='YlOrRd'
     )
     return fig
@@ -528,7 +526,7 @@ def create_review_distribution(filtered_df):
 def create_review_by_category(filtered_df):
     """Review moyen par catégorie"""
     if 'review_score' in filtered_df.columns and not filtered_df['review_score'].isna().all():
-        category_reviews = filtered_df.groupby('product_category_name_english')['review_score'].mean().nlargest(15)
+        category_reviews = filtered_df.groupby('product_category_name')['review_score'].mean().nlargest(15)
 
         fig = px.bar(
             x=category_reviews.values,
@@ -663,20 +661,20 @@ def update_product_charts(top_n, start_date, end_date, status_filter):
         filtered_df = filtered_df[filtered_df['order_status'].isin(status_filter)]
 
     # Top catégories par CA
-    top_categories = filtered_df.groupby('product_category_name_english')['total_amount_fcfa'].sum().nlargest(top_n)
+    top_categories = filtered_df.groupby('product_category_name')['total_price'].sum().nlargest(top_n)
 
     fig1 = px.bar(
         x=top_categories.values / 1e6,
         y=top_categories.index,
         orientation='h',
         title=f"Top {top_n} Catégories par CA",
-        labels={'x': 'CA (Millions FCFA)', 'y': 'Catégorie'},
+        labels={'x': 'CA (Millions BRL)', 'y': 'Catégorie'},
         color=top_categories.values,
         color_continuous_scale= 'Viridis'
     )
 
     # Top catégories par nombre de commandes
-    top_orders = filtered_df.groupby('product_category_name_english')['order_id'].nunique().nlargest(top_n)
+    top_orders = filtered_df.groupby('product_category_name')['order_id'].nunique().nlargest(top_n)
 
     fig2 = px.bar(
         x=top_orders.values,
@@ -689,9 +687,9 @@ def update_product_charts(top_n, start_date, end_date, status_filter):
     )
 
     # Tableau de performance
-    category_stats = filtered_df.groupby('product_category_name_english').agg({
+    category_stats = filtered_df.groupby('product_category_name').agg({
         'order_id': 'nunique',
-        'total_amount_fcfa': 'sum',
+        'total_price': 'sum',
         'review_score': 'mean' if 'review_score' in filtered_df.columns else lambda x: 0
     }).round(2)
     category_stats.columns = ['Commandes', 'CA Total', 'Note Moy']
@@ -701,7 +699,7 @@ def update_product_charts(top_n, start_date, end_date, status_filter):
     table = dash_table.DataTable(
         data=category_stats.reset_index().to_dict('records'),
         columns=[
-            {"name": "Catégorie", "id": "product_category_name_english"},
+            {"name": "Catégorie", "id": "product_category_name"},
             {"name": "Commandes", "id": "Commandes"},
             {"name": "CA Total", "id": "CA Total"},
             {"name": "Note Moyenne", "id": "Note Moy"}
@@ -723,56 +721,5 @@ def update_product_charts(top_n, start_date, end_date, status_filter):
     ])
 
 
-# CSS personnalisé
-app.index_string = '''
-    <!DOCTYPE html>
-    <html>
-        <head>
-            {%metas%}
-            <title>{%title%}</title>
-            {%favicon%}
-            {%css%}
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                    margin: 0;
-                    background-color: #f5f6fa;
-                }
-                .tab {
-                    padding: 12px 20px !important;
-                    font-weight: 500;
-                }
-                .tab--selected {
-                    background-color: #3498db !important;
-                    color: white !important;
-                }
-                h1, h2, h3 {
-                    font-weight: 600;
-                }
-                .dash-table-container {
-                    margin: 20px auto;
-                    max-width: 90%;
-                }
-                .DateRangePickerInput {
-                    background-color: white !important;
-                    border-radius: 5px;
-                }
-                .Select-control {
-                    border-radius: 5px !important;
-                }
-            </style>
-        </head>
-        <body>
-            {%app_entry%}
-            <footer>
-                {%config%}
-                {%scripts%}
-                {%renderer%}
-            </footer>
-        </body>
-    </html>
-    '''
-
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8050))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=8050, debug=False)
