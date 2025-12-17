@@ -7,22 +7,30 @@ Application Dash avec filtres interactifs
 """
 
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, dash_table
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
 import os
+import numpy as np
+from datetime import datetime, timedelta
 
 # Configuration de l'app
-app = dash.Dash(__name__, use_pages=True, suppress_callback_exceptions=True)
+
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Olist - Analyse des Performances Commerciales"
 
 server = app.server
+
+
 
 # Chargement des données
 def load_data():
     """Charge toutes les données nécessaires"""
     try:
         # Données principales
-        df = pd.read_csv('../output/prepared/olist_prepared_data.csv')
+        df = pd.read_csv('output/prepared/olist_prepared_data.csv')
         df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'])
         df['order_delivered_customer_date'] = pd.to_datetime(df['order_delivered_customer_date'])
         return df
@@ -30,18 +38,23 @@ def load_data():
         print(f"Erreur lors du chargement : {e}")
         return None
 
+
 # Chargement des données
 df = load_data()
 
 # Couleurs du thème
 colors = {
+    'primary': '#3498db',
+    'success': '#27ae60',
+    'warning': '#f39c12',
+    'danger': '#e74c3c',
+    'info': '#9b59b6',
     'dark': '#2c3e50',
     'light': '#ecf0f1'
 }
 
 # Layout principal
 app.layout = html.Div([
-    dcc.Store(id='store-data', data=df.to_json(date_format='iso', orient='split') if df is not None else None),
     # Header
     html.Div([
         html.Div([
@@ -85,103 +98,299 @@ app.layout = html.Div([
     ], style={'padding': '0 20px'}),
 
     # Navigation
-    html.Div([
-        dcc.Link(f"{page['name']}", href=page["relative_path"], className="tab")
-        for page in dash.page_registry.values()
+    dcc.Tabs(id='main-tabs', value='overview', children=[
+        dcc.Tab(label='🏠 Vue d\'ensemble', value='overview'),
+        dcc.Tab(label='📦 Analyse Produits', value='products'),
+        dcc.Tab(label='📈 Analyse Temporelle', value='temporal'),
+        dcc.Tab(label='⭐ Satisfaction', value='satisfaction'),
+        dcc.Tab(label='🚚 Logistique', value='logistics')
     ], style={'fontSize': '16px', 'padding': '0 20px'}),
 
-    # Contenu de la page
-    dash.page_container,
+    # Contenu
+    html.Div(id='page-content', style={'padding': '20px', 'backgroundColor': colors['light']})
 ])
 
+
+# Callback pour filtrer les données
 @app.callback(
-    Output(dash.page_container.id, 'children'),
-    [Input('date-filter', 'start_date'),
+    Output('page-content', 'children'),
+    [Input('main-tabs', 'value'),
+     Input('date-filter', 'start_date'),
      Input('date-filter', 'end_date'),
-     Input('status-filter', 'value'),
-     Input('store-data', 'data')]
+     Input('status-filter', 'value')]
 )
-def display_page_content(start_date, end_date, status_filter, data):
-    if data is None:
+def display_page(tab, start_date, end_date, status_filter):
+    if df is None:
         return html.Div([
             html.H3("⚠️ Erreur de chargement des données"),
             html.P("Vérifiez que le fichier '../output/prepared/olist_prepared_data.csv' existe")
         ])
 
-    df_filtered = pd.read_json(data, orient='split')
-    df_filtered['order_purchase_timestamp'] = pd.to_datetime(df_filtered['order_purchase_timestamp'])
+    # Filtrage des données
+    filtered_df = df.copy()
 
     # Filtre par date
     if start_date and end_date:
-        df_filtered = df_filtered[
-            (df_filtered['order_purchase_timestamp'] >= start_date) &
-            (df_filtered['order_purchase_timestamp'] <= end_date)
+        filtered_df = filtered_df[
+            (filtered_df['order_purchase_timestamp'] >= start_date) &
+            (filtered_df['order_purchase_timestamp'] <= end_date)
             ]
 
     # Filtre par statut
     if status_filter and 'all' not in status_filter and isinstance(status_filter, list):
-        df_filtered = df_filtered[df_filtered['order_status'].isin(status_filter)]
+        filtered_df = filtered_df[filtered_df['order_status'].isin(status_filter)]
 
-    # Get the current page's layout function
-    page_layout = dash.page_registry[dash.callback_context.triggered[0]['prop_id'].split('.')[0]]['layout']
-    return page_layout(df_filtered=df_filtered)
+    if tab == 'overview':
+        return create_overview_page(filtered_df)
+    elif tab == 'products':
+        return create_products_page(filtered_df)
+    elif tab == 'temporal':
+        return create_temporal_page(filtered_df)
+    elif tab == 'satisfaction':
+        return create_satisfaction_page(filtered_df)
+    elif tab == 'logistics':
+        return create_logistics_page(filtered_df)
+    else:
+        return html.Div()
 
 
-# CSS personnalisé
-app.index_string = '''
-    <!DOCTYPE html>
-    <html>
-        <head>
-            {%metas%}
-            <title>{%title%}</title>
-            {%favicon%}
-            {%css%}
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                    margin: 0;
-                    background-color: #f5f6fa;
-                }
-                .tab {
-                    padding: 12px 20px !important;
-                    font-weight: 500;
-                    text-decoration: none;
-                    color: black;
-                }
-                .tab--selected {
-                    background-color: #3498db !important;
-                    color: white !important;
-                }
-                h1, h2, h3 {
-                    font-weight: 600;
-                }
-                .dash-table-container {
-                    margin: 20px auto;
-                    max-width: 90%;
-                }
-                .DateRangePickerInput {
-                    background-color: white !important;
-                    border-radius: 5px;
-                }
-                .Select-control {
-                    border-radius: 5px !important;
-                }
-            </style>
-        </head>
-        <body>
-            {%app_entry%}
-            <footer>
-                {%config%}
-                {%scripts%}
-                {%renderer%}
-            </footer>
-        </body>
-    </html>
-    '''
+# PAGE 1: VUE D'ENSEMBLE
+def create_overview_page(filtered_df):
+    """Crée la page vue d'ensemble"""
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8050))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Calcul des métriques
+    total_orders = filtered_df['order_id'].nunique()
+    total_customers = filtered_df['customer_unique_id'].nunique()
+    total_revenue = filtered_df['total_amount_fcfa'].sum()
+    avg_basket = filtered_df.groupby('order_id')['total_amount_fcfa'].sum().mean() if total_orders > 0 else 0
+    avg_review = filtered_df['review_score'].mean() if 'review_score' in filtered_df.columns and not filtered_df[
+        'review_score'].isna().all() else 0
+    conversion_rate = (filtered_df[filtered_df['order_status'] == 'delivered'][
+                           'order_id'].nunique() / total_orders * 100) if total_orders > 0 else 0
+
+    return html.Div([
+        # KPIs principaux
+        html.Div([
+            create_kpi_card("Commandes", f"{total_orders:,}", colors['primary'], "📦"),
+            create_kpi_card("Clients", f"{total_customers:,}", colors['success'], "👥"),
+            create_kpi_card("CA Total", f"{total_revenue / 1e6:.1f}M FCFA", colors['danger'], "💰"),
+            create_kpi_card("Panier Moyen", f"{avg_basket:,.0f} FCFA", colors['warning'], "🛒"),
+            create_kpi_card("Note Moyenne", f"{avg_review:.2f}/5", colors['info'], "⭐"),
+            create_kpi_card("Taux Livraison", f"{conversion_rate:.1f}%", colors['success'], "✅"),
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'between', 'marginBottom': '30px'}),
+
+        # Graphiques principaux
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=create_revenue_evolution(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block'}),
+
+            html.Div([
+                dcc.Graph(figure=create_orders_by_status(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block', 'float': 'right'}),
+        ]),
+
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=create_top_categories(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block'}),
+
+            html.Div([
+                dcc.Graph(figure=create_geographic_distribution(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block', 'float': 'right'}),
+        ], style={'marginTop': '20px'}),
+    ])
+
+
+# PAGE 2: ANALYSE PRODUITS
+def create_products_page(filtered_df):
+    """Crée la page d'analyse des produits"""
+
+    return html.Div([
+        html.H2("Analyse des Produits", style={'textAlign': 'center', 'marginBottom': '30px'}),
+
+        # Sélecteurs
+        html.Div([
+            html.Label("Nombre de catégories à afficher:"),
+            dcc.Slider(
+                id='top-n-categories',
+                min=5,
+                max=20,
+                step=5,
+                value=10,
+                marks={i: str(i) for i in range(5, 21, 5)}
+            )
+        ], style={'width': '50%', 'margin': 'auto', 'marginBottom': '30px'}),
+
+        # Container pour les graphiques
+        html.Div(id='product-charts-container')
+    ])
+
+
+# PAGE 3: ANALYSE TEMPORELLE
+def create_temporal_page(filtered_df):
+    """Crée la page d'analyse temporelle"""
+
+    return html.Div([
+        html.H2("Analyse Temporelle et Saisonnalité", style={'textAlign': 'center', 'marginBottom': '30px'}),
+
+        # Évolution mensuelle
+        html.Div([
+            dcc.Graph(figure=create_monthly_evolution(filtered_df))
+        ]),
+
+        # Patterns hebdomadaires et horaires
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=create_weekly_pattern(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block'}),
+
+            html.Div([
+                dcc.Graph(figure=create_hourly_pattern(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block', 'float': 'right'}),
+        ], style={'marginTop': '20px'}),
+
+        # Heatmap jour/heure
+        html.Div([
+            html.H3("Heatmap Activité (Jour/Heure)", style={'textAlign': 'center', 'marginTop': '30px'}),
+            dcc.Graph(figure=create_activity_heatmap(filtered_df))
+        ])
+    ])
+
+
+# PAGE 4: SATISFACTION
+def create_satisfaction_page(filtered_df):
+    """Crée la page d'analyse de la satisfaction"""
+
+    return html.Div([
+        html.H2("Analyse de la Satisfaction Client", style={'textAlign': 'center', 'marginBottom': '30px'}),
+
+        # Distribution des reviews
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=create_review_distribution(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block'}),
+
+            html.Div([
+                dcc.Graph(figure=create_review_by_category(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block', 'float': 'right'}),
+        ]),
+
+        # Corrélation satisfaction/délai
+        html.Div([
+            html.H3("Impact du Délai sur la Satisfaction", style={'textAlign': 'center', 'marginTop': '30px'}),
+            dcc.Graph(figure=create_delivery_satisfaction_correlation(filtered_df))
+        ])
+    ])
+
+
+# PAGE 5: LOGISTIQUE
+def create_logistics_page(filtered_df):
+    """Crée la page d'analyse logistique"""
+
+    avg_delivery = filtered_df['delivery_days'].mean() if 'delivery_days' in filtered_df.columns and not filtered_df[
+        'delivery_days'].isna().all() else 0
+    late_deliveries = (
+                filtered_df['delivery_vs_estimate'] > 0).sum() if 'delivery_vs_estimate' in filtered_df.columns else 0
+    on_time_rate = (filtered_df[
+                        'delivery_vs_estimate'] <= 0).mean() * 100 if 'delivery_vs_estimate' in filtered_df.columns else 0
+    min_delivery = filtered_df['delivery_days'].min() if 'delivery_days' in filtered_df.columns and not filtered_df[
+        'delivery_days'].isna().all() else 0
+    max_delivery = filtered_df['delivery_days'].max() if 'delivery_days' in filtered_df.columns and not filtered_df[
+        'delivery_days'].isna().all() else 0
+
+    return html.Div([
+        html.H2("Analyse Logistique", style={'textAlign': 'center', 'marginBottom': '30px'}),
+
+        # KPIs Logistique
+        html.Div([
+            create_kpi_card("Délai Moyen", f"{avg_delivery:.1f} jours", colors['primary'], "📦"),
+            create_kpi_card("Livraisons en Retard", f"{late_deliveries:,}", colors['danger'], "⏰"),
+            create_kpi_card("Livraisons à Temps", f"{on_time_rate:.1f}%", colors['success'], "✅"),
+            create_kpi_card("Délai Min-Max", f"{min_delivery:.0f}-{max_delivery:.0f} j", colors['info'], "📊"),
+        ], style={'display': 'flex', 'justifyContent': 'space-around', 'marginBottom': '30px'}),
+
+        # Graphiques
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=create_delivery_time_distribution(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block'}),
+
+            html.Div([
+                dcc.Graph(figure=create_delivery_by_state(filtered_df))
+            ], style={'width': '49%', 'display': 'inline-block', 'float': 'right'}),
+        ]),
+
+        # Performance par état
+        html.Div([
+            html.H3("Performance de Livraison par État", style={'textAlign': 'center', 'marginTop': '30px'}),
+            dcc.Graph(figure=create_delivery_performance_map(filtered_df))
+        ])
+    ])
+
+
+# Fonctions de création des graphiques
+def create_kpi_card(title, value, color, icon):
+    """Crée une carte KPI"""
+    return html.Div([
+        html.Div([
+            html.Span(icon, style={'fontSize': '30px', 'marginRight': '10px'}),
+            html.H4(title, style={'margin': '10px 0', 'color': colors['dark']})
+        ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}),
+        html.H2(value, style={'color': color, 'margin': '10px 0', 'textAlign': 'center'})
+    ], style={
+        'backgroundColor': 'white',
+        'padding': '20px',
+        'borderRadius': '10px',
+        'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+        'width': '180px',
+        'margin': '10px'
+    })
+
+
+def create_revenue_evolution(filtered_df):
+    """Graphique évolution du CA"""
+    monthly_revenue = filtered_df.groupby(filtered_df['order_purchase_timestamp'].dt.to_period('M'))[
+        'total_amount_fcfa'].sum()
+
+    fig = px.line(
+        x=monthly_revenue.index.astype(str),
+        y=monthly_revenue.values / 1e6,
+        title="Évolution du Chiffre d'Affaires",
+        labels={'x': 'Mois', 'y': 'CA (Millions FCFA)'}
+    )
+    fig.update_traces(mode='lines+markers')
+    return fig
+
+
+def create_orders_by_status(filtered_df):
+    """Graphique des commandes par statut"""
+    status_counts = filtered_df['order_status'].value_counts()
+
+    fig = px.pie(
+        values=status_counts.values,
+        names=status_counts.index,
+        title="Distribution des Statuts de Commande",
+        color_discrete_sequence=px.colors.qualitative.Set3
+    )
+    return fig
+
+
+def create_top_categories(filtered_df):
+    """Graphique top catégories"""
+    top_categories = filtered_df.groupby('product_category_name_english')['total_amount_fcfa'].sum().nlargest(10)
+
+    fig = px.bar(
+        x=top_categories.values / 1e6,
+        y=top_categories.index,
+        orientation='h',
+        title="Top 10 Catégories par CA",
+        labels={'x': 'CA (Millions FCFA)', 'y': 'Catégorie'}
+    )
+    return fig
+
+
+def create_geographic_distribution(filtered_df):
     """Graphique distribution géographique"""
     state_revenue = filtered_df.groupby('customer_state')['total_amount_fcfa'].sum().nlargest(10)
 
